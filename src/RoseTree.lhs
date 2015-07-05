@@ -1,12 +1,17 @@
 > {-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, FunctionalDependencies, UndecidableInstances #-}
 > {-# LANGUAGE InstanceSigs, ScopedTypeVariables, TypeOperators #-}
 
+(This is just a testing module implementing a Rose Tree so I can try
+all of the more complicated methods and functions on a simple setting
+first.)
+
 > module RoseTree where
 >
 > import Data.Map.Strict as Map
 > import Data.Traversable
 > import Data.Foldable
 > import Data.Monoid
+> import Text.JSON
 > 
 > data Tree a = Empty | Leaf a | Node (Tree a) a (Tree a)
 > instance Functor Tree where
@@ -55,3 +60,12 @@
 >   fancyConcat' k (RT m)     = Prelude.foldr ($) k childrenConts
 >     where
 >       childrenConts = Prelude.map (\c k -> fancyConcat' k c) (elems m)
+
+-- > data RT k v = RTLeaf v
+-- >             | RT (Map k (RT k v)) deriving (Eq, Ord, Show)
+
+-- > f :: (Eq k, Eq v, JSON v) => RT k v -> JSValue
+
+> f :: RT String String -> JSValue
+> f (RTLeaf v) = showJSON $ toJSObject [("leaf", showJSON v)]
+> f (RT m)     = showJSON $ toJSObject (Prelude.map (\ (k, v) -> (k, f v)) (Map.assocs m))
