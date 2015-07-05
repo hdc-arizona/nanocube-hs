@@ -49,7 +49,7 @@ c3 = add p3 u c2
 c4 = add p4 u c3
 
 qsum :: [[a]] -> q -> SimpleQuery a q
-qsum addrs q = SimpleQuery (QuerySum $ map MkDimAddr addrs) q
+qsum addrs q = SimpleQuery (SimpleQueryDim QuerySum (map MkDimAddr addrs)) q
 
 q0'' = ()
 q0' :: SimpleQuery Int ()
