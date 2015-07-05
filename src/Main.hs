@@ -8,6 +8,7 @@ import Spatial
 import Nanocube
 import Text.JSON
 import Data.Monoid
+import RoseTree
 
 main = putStrLn "hello"
 

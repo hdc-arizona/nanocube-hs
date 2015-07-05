@@ -5,6 +5,7 @@
 >
 > import qualified Data.Map.Strict as Map
 > import Nanocube
+> import Data.Maybe
 > 
 > class NCDim a b | a -> b where
 >   dimAddr :: a -> DimAddr b
@@ -57,7 +58,7 @@ bad idea anyway.
 
 The same general idea applies for regions in other dimensions
 
-> newtype Region a = MkRegion (Either () (Map.Map a (Region a)))
+> newtype Region a = MkRegion (Either () (Map.Map a (Region a))) deriving Eq
 > 
 > limitResolution' :: Region a -> Int -> Region a -> Region a
 > limitResolution' replacement 0 _ = replacement
@@ -89,6 +90,28 @@ The same general idea applies for regions in other dimensions
 >         children = map regionCover' [(leftX, leftY), (rightX, leftY),
 >                                      (leftX, rightY), (rightX, rightY)]
 >         keys = [SW, SE, NW, NE]
+
+
+visitRegion does a CPS-transformed enumeration of all the NanoCons
+cells from c contained entirely inside r.
+
+> type KL a = [a] -> [a]
+> 
+> visitRegion :: (Eq r, Ord r) => NanoCons s r n -> Region r -> [NanoCons s r n]
+> visitRegion c r = (visitRegion' id c r) [] where
+>   rejigger :: (a -> b -> c -> d) -> (a -> (b, c) -> d)
+>   rejigger f p1 = uncurry (f p1)
+>   visitRegion' :: (Eq r, Ord r) => (KL (NanoCons s r n)) -> NanoCons s r n -> Region r -> (KL (NanoCons s r n))
+>   visitRegion' k c (MkRegion (Left ())) = \l -> c : (k l)
+>   visitRegion' k c (MkRegion (Right regionRefine)) = Prelude.foldr ($) k childrenConts where
+>     childrenConts = Prelude.map (\(c, r) k -> (rejigger visitRegion') k (c, r)) children
+>     children = let (NanoCons next nanoRefine) = c
+>                    -- lookup is in the Maybe monad, so returns Nothing if either
+>                    -- Map.lookup fails
+>                    lookup k = do r <- Map.lookup k regionRefine
+>                                  n <- Map.lookup k nanoRefine
+>                                  return (n, r)
+>                 in catMaybes $ map lookup $ Map.keys regionRefine
 
 > bisect (mn, mx) = ((mn, mid), (mid, mx)) where mid = (mn + mx) / 2
 

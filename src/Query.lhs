@@ -7,7 +7,6 @@
 > import Spatial
 > import qualified Data.Map.Strict as Map
 > import Data.Monoid
-> import Data.Maybe
 > import Text.JSON
 > import Data.ByteString (ByteString)
 
@@ -103,18 +102,4 @@ original nanocube here, but maybe that can be fixed later.
 >       where
 >         makePair (addrs, c) = showJSON (toJSObject [("key", showJSON addrs),
 >                                                     ("value", asJSON (rest, next, rnext))])
-
---------------------------------------------------------------------------------
-
-This is slower than I'd like because of all the nested
-concatMaps. There should be a CPS transformation in here.
-
-> visitRegion :: Ord r => (NanoCons s r n -> a) -> NanoCons s r n -> Region r -> [a]
-> visitRegion f c                          (MkRegion (Left ())) = [f c]
-> visitRegion f (NanoCons next nanoRefine) (MkRegion (Right regionRefine)) =
->   let lookup k = do n <- Map.lookup k nanoRefine
->                     r <- Map.lookup k regionRefine
->                     return (n, r)
->       intersectionRefines = catMaybes $ map lookup $ Map.keys regionRefine
->    in concatMap (uncurry (visitRegion f)) intersectionRefines
 
