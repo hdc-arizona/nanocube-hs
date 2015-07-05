@@ -10,25 +10,112 @@
 > class NCDim a b | a -> b where
 >   dimAddr :: a -> DimAddr b
 
-> quadTreeZip v1 v2 = zip (digits $ frac v1) (digits $ frac v2)
->   where
->     digits :: RealFrac a => a -> [Bool]
->     digits x | x >= 0.5  = True  : rest
->              | otherwise = False : rest
->       where rest = digits $ x * 2
->
-> data Quadrant = NW | NE | SW | SE deriving (Eq, Show, Enum, Ord)
-> whichQuadrant :: (Bool, Bool) -> Quadrant
-> whichQuadrant (False, False) = SW
-> whichQuadrant (True,  False) = SE
-> whichQuadrant (False, True)  = NW
-> whichQuadrant (True,  True)  = NE
+A "Bidant" is the 1-dimensional equivalent of a quadrant.
+
+> data Quadrant = NW | NE | SW | SE deriving (Eq, Show, Enum, Ord, Bounded)
+> type Bidant = Bool
 
 > newtype NCUnitSquare a = MkUS (a, a) deriving Show
+> newtype NCUnitInterval a = MkUI a deriving Show
 
 > instance (Floating a, RealFrac a) => NCDim (NCUnitSquare a) Quadrant where
 >   dimAddr :: NCUnitSquare a -> DimAddr Quadrant
 >   dimAddr (MkUS (x, y)) = MkDimAddr $ map whichQuadrant $ quadTreeZip x y
+>     where
+>       whichQuadrant :: (Bool, Bool) -> Quadrant
+>       whichQuadrant (False, False) = SW
+>       whichQuadrant (True,  False) = SE
+>       whichQuadrant (False, True)  = NW
+>       whichQuadrant (True,  True)  = NE
+>       quadTreeZip v1 v2 = zip (digits $ frac v1) (digits $ frac v2)
+
+> instance (Floating a, RealFrac a) => NCDim (NCUnitInterval a) Bidant where
+>   dimAddr :: NCUnitInterval a -> DimAddr Bidant
+>   dimAddr (MkUI x) = MkDimAddr $ digits x
+
+Some type synonyms for convenience
+
+> type NC2D s n = NanoCons s Quadrant n
+> type NC1D s n = NanoCons s Bidant n
+
+--------------------------------------------------------------------------------
+
+Interval utilities
+
+We encode intervals as (Floating a, RealFrac a) => (a,a)
+
+> bisect (mn, mx) = ((mn, mid), (mid, mx)) where mid = (mn + mx) / 2
+> (lmn, lmx) `outsideOf` (rmn, rmx) = lmx <= rmn || lmn >= rmx
+> (lmn, lmx) `insideOf` (rmn, rmx) =
+>   lmn >= rmn && lmn <= rmx && lmx >= rmn && lmx <= rmx
+
+--------------------------------------------------------------------------------
+
+> newtype Region a = MkRegion {region :: Either () (Map.Map a (Region a))} deriving (Eq, Show)
+
+visitRegion does a CPS-transformed enumeration of all the NanoCons
+cells from c contained entirely inside r.
+
+> type KL a = [a] -> [a]
+> 
+> visitRegion :: (Eq r, Ord r) => NanoCons s r n -> Region r -> [NanoCons s r n]
+> visitRegion c r = (visitRegion' id c r) [] where
+>   rejigger :: (a -> b -> c -> d) -> (a -> (b, c) -> d)
+>   rejigger f p1 = uncurry (f p1)
+>   visitRegion' :: (Eq r, Ord r) => (KL (NanoCons s r n)) -> NanoCons s r n -> Region r -> (KL (NanoCons s r n))
+>   visitRegion' k c (MkRegion (Left ())) = \l -> c : (k l)
+>   visitRegion' k c (MkRegion (Right regionRefine)) = Prelude.foldr ($) k childrenConts where
+>     childrenConts = Prelude.map (\(c, r) k -> (rejigger visitRegion') k (c, r)) children
+>     children = let (NanoCons next nanoRefine) = c
+>                    -- lookup is in the Maybe monad, so returns Nothing if either
+>                    -- Map.lookup fails
+>                    lookup k = do r <- Map.lookup k regionRefine
+>                                  n <- Map.lookup k nanoRefine
+>                                  return (n, r)
+>                 in catMaybes $ map lookup $ Map.keys regionRefine
+
+> class HasTypeSize a where
+>   typeSize :: a -> Int
+>
+> instance (Enum a, Bounded a) => HasTypeSize a where
+>   typeSize i = 1 + fromEnum (maxBound `asTypeOf` i)
+
+simplifyRegion simplifies regions specifically by ensuring that they
+have bounded depth, and that their representation is minimal (so the
+total number of leaves is smallest). This makes aggregation queries
+faster, which might matter when dealing with monoids with relatively
+expensive sum operators.
+
+cropRegion replaces subregions that are too deep with empty space,
+while coverRegion replaces those subregions with fully covered space.
+
+> cropRegion, coverRegion :: (Eq a, Enum a, Bounded a) => Int -> Region a -> Region a
+> cropRegion = simplifyRegion (MkRegion $ Right Map.empty)
+> coverRegion = simplifyRegion (MkRegion $ Left ())
+
+Note the seriously stupid "size" variable, which is a terrible
+contortion to get the size of an enum type.
+
+> simplifyRegion :: (Eq a, Enum a, Bounded a) => Region a -> Int -> Region a -> Region a
+> simplifyRegion replacement 0 r@(MkRegion (Left ())) = r
+> simplifyRegion replacement 0 r@(MkRegion (Right m))
+>   | m == Map.empty = r
+>   | otherwise = replacement
+> simplifyRegion replacement n (MkRegion r)
+>   | n < 0     = error "limitResolution' needs a positive cutoff"
+>   | otherwise = MkRegion $ case r of
+>         Left () -> Left ()
+>         Right m -> let newMap = Map.filter (\v -> v /= MkRegion (Right Map.empty)) $ fmap (simplifyRegion replacement (n - 1)) m
+>                        size = maybe (-1) typeSize $ listToMaybe (Map.keys m)
+>                        -- I just need a witness of type a for this, because of
+>                        -- that HasTypeSize class. This is stupid.
+>                     in if (Map.size newMap /= size)
+>                        then Right newMap
+>                             else if all (\x -> x == MkRegion (Right Map.empty)) newMap
+>                                  then Right Map.empty
+>                                  else if all (\x -> x == MkRegion (Left ())) newMap
+>                                       then Left ()
+>                                       else Right newMap
 
 --------------------------------------------------------------------------------
 
@@ -56,30 +143,15 @@ Map.assocs $ map (\x -> (x, Right Map.empty)) [SW, SE, NW, NE]".
 In general, regions will not have finite representations, so Eq is a
 bad idea anyway.
 
-The same general idea applies for regions in other dimensions
-
-> newtype Region a = MkRegion (Either () (Map.Map a (Region a))) deriving Eq
-> 
-> limitResolution' :: Region a -> Int -> Region a -> Region a
-> limitResolution' replacement 0 _ = replacement
-> limitResolution' replacement n (MkRegion r)
->   | n < 0     = error "limitResolution' wants a positive cutoff"
->   | otherwise = MkRegion $ case r of
->         Left () -> Left ()
->         Right m -> Right $ fmap (limitResolution' replacement (n - 1)) m
->
-> -- regionCover assumes that mnX < mxX, and mnY < mxY
-> regionCover :: (Floating a, RealFrac a) => (a, a) -> (a, a) -> Region Quadrant
-> regionCover queryX queryY =
->     regionCover' ((0, 1), (0, 1))
+> -- quadrantCover assumes that mnX < mxX, and mnY < mxY
+> quadrantCover :: (Floating a, RealFrac a) => (a, a) -> (a, a) -> Region Quadrant
+> quadrantCover queryX queryY =
+>     quadrantCover' ((0, 1), (0, 1))
 >   where
->     (lmn, lmx) `outsideOf` (rmn, rmx) = lmx <= rmn || lmn >= rmx
->     (lmn, lmx) `insideOf` (rmn, rmx) =
->         lmn >= rmn && lmn <= rmx && lmx >= rmn && lmx <= rmx
->     regionCover' (regionX, regionY)
->       | insideX     && insideY     = MkRegion $ Left ()
->       | outsideX    && outsideY    = MkRegion $ Right $ Map.empty
->       | otherwise                  = MkRegion $ Right $ Map.fromList $ zip keys children
+>     quadrantCover' (regionX, regionY)
+>       | insideX     && insideY  = MkRegion $ Left ()
+>       | outsideX    && outsideY = MkRegion $ Right $ Map.empty
+>       | otherwise               = MkRegion $ Right $ Map.fromList $ zip keys children
 >       where
 >         insideX  = regionX `insideOf` queryX 
 >         insideY  = regionY `insideOf` queryY
@@ -87,33 +159,29 @@ The same general idea applies for regions in other dimensions
 >         outsideY = regionY `outsideOf` queryY
 >         (leftX, rightX) = bisect regionX
 >         (leftY, rightY) = bisect regionY
->         children = map regionCover' [(leftX, leftY), (rightX, leftY),
+>         children = map quadrantCover' [(leftX, leftY), (rightX, leftY),
 >                                      (leftX, rightY), (rightX, rightY)]
 >         keys = [SW, SE, NW, NE]
 
+--------------------------------------------------------------------------------
 
-visitRegion does a CPS-transformed enumeration of all the NanoCons
-cells from c contained entirely inside r.
+The same general idea of "Region Quadrant" applies for regions in other dimensions.
 
-> type KL a = [a] -> [a]
-> 
-> visitRegion :: (Eq r, Ord r) => NanoCons s r n -> Region r -> [NanoCons s r n]
-> visitRegion c r = (visitRegion' id c r) [] where
->   rejigger :: (a -> b -> c -> d) -> (a -> (b, c) -> d)
->   rejigger f p1 = uncurry (f p1)
->   visitRegion' :: (Eq r, Ord r) => (KL (NanoCons s r n)) -> NanoCons s r n -> Region r -> (KL (NanoCons s r n))
->   visitRegion' k c (MkRegion (Left ())) = \l -> c : (k l)
->   visitRegion' k c (MkRegion (Right regionRefine)) = Prelude.foldr ($) k childrenConts where
->     childrenConts = Prelude.map (\(c, r) k -> (rejigger visitRegion') k (c, r)) children
->     children = let (NanoCons next nanoRefine) = c
->                    -- lookup is in the Maybe monad, so returns Nothing if either
->                    -- Map.lookup fails
->                    lookup k = do r <- Map.lookup k regionRefine
->                                  n <- Map.lookup k nanoRefine
->                                  return (n, r)
->                 in catMaybes $ map lookup $ Map.keys regionRefine
+Region Bidant, specifically, encodes a subset of [0,1], which we'll use to
+encode one-dimensional columns.
 
-> bisect (mn, mx) = ((mn, mid), (mid, mx)) where mid = (mn + mx) / 2
+> bidantCover :: (Floating a, RealFrac a) => (a, a) -> Region Bidant
+> bidantCover query = bidantCover' (0, 1) where
+>   bidantCover' interval
+>     | inside    = MkRegion $ Left ()
+>     | outside   = MkRegion $ Right $ Map.empty
+>     | otherwise = MkRegion $ Right $ Map.fromList $ filter (\ (k, v) -> v /= MkRegion (Right Map.empty)) $ zip keys children
+>     where
+>       inside  = interval `insideOf` query
+>       outside = interval `outsideOf` query
+>       (left, right) = bisect interval
+>       children = map bidantCover' [left, right]
+>       keys = [False, True]
 
 -- > newtype NCLatLonDegs a = MkLLD (a, a) deriving Show
 -- > newtype NCLatLon a = MkLL (a, a) deriving Show
@@ -138,8 +206,8 @@ cells from c contained entirely inside r.
 -- > fromLatLon (MkLL (lat, lon)) = MkSM (lon, log $ tan $ (lat / 2 + pi / 4))
 
 -- this requires a 2D dimension
--- regionCover :: (Floating a, RealFrac a, Integral b) => (a, a) -> (a, a) -> [DimAddr b]
--- regionCover 
+-- quadrantCover :: (Floating a, RealFrac a, Integral b) => (a, a) -> (a, a) -> [DimAddr b]
+-- quadrantCover 
 
 
 --------------------------------------------------------------------------------
@@ -149,3 +217,8 @@ Utility
 > truncateDim n (MkDimAddr l) = MkDimAddr $ take n l
 > frac :: RealFrac a => a -> a
 > frac x = x - (fromIntegral $ (floor x :: Integer))
+
+> digits :: RealFrac a => a -> [Bool]
+> digits x | x >= 0.5  = True  : rest
+>          | otherwise = False : rest
+>   where rest = digits $ x * 2
