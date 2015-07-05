@@ -6,6 +6,7 @@
 > import qualified Data.Map.Strict as Map
 > import Nanocube
 > import Data.Maybe
+> import Debug.Trace
 > 
 > class NCDim a b | a -> b where
 >   dimAddr :: a -> DimAddr b
@@ -144,14 +145,20 @@ In general, regions will not have finite representations, so Eq is a
 bad idea anyway.
 
 > -- quadrantCover assumes that mnX < mxX, and mnY < mxY
-> quadrantCover :: (Floating a, RealFrac a) => (a, a) -> (a, a) -> Region Quadrant
+> quadrantCover :: (Floating a, RealFrac a, Show a) => (a, a) -> (a, a) -> Region Quadrant
 > quadrantCover queryX queryY =
 >     quadrantCover' ((0, 1), (0, 1))
 >   where
 >     quadrantCover' (regionX, regionY)
->       | insideX     && insideY  = MkRegion $ Left ()
->       | outsideX    && outsideY = MkRegion $ Right $ Map.empty
->       | otherwise               = MkRegion $ Right $ Map.fromList $ zip keys children
+>       | insideX     && insideY  =
+>           -- trace ("inside " ++ (show regionX) ++ "-" ++ (show regionY) ++ "\n") $
+>           (MkRegion $ Left ())
+>       | outsideX    || outsideY =
+>           -- trace ("outside " ++ (show regionX) ++ "-" ++ (show regionY) ++ "\n") $
+>           (MkRegion $ Right $ Map.empty)
+>       | otherwise               =
+>           -- trace ("split " ++ (show regionX) ++ "-" ++ (show regionY) ++ "\n") $
+>           (MkRegion $ Right $ Map.fromList $ filter (\ (_, v) -> v /= (MkRegion (Right Map.empty))) $ zip keys children)
 >       where
 >         insideX  = regionX `insideOf` queryX 
 >         insideY  = regionY `insideOf` queryY
@@ -159,8 +166,10 @@ bad idea anyway.
 >         outsideY = regionY `outsideOf` queryY
 >         (leftX, rightX) = bisect regionX
 >         (leftY, rightY) = bisect regionY
->         children = map quadrantCover' [(leftX, leftY), (rightX, leftY),
->                                      (leftX, rightY), (rightX, rightY)]
+>         children = map quadrantCover' [(leftX,  leftY),
+>                                        (rightX, leftY),
+>                                        (leftX,  rightY),
+>                                        (rightX, rightY)]
 >         keys = [SW, SE, NW, NE]
 
 --------------------------------------------------------------------------------
@@ -183,38 +192,12 @@ encode one-dimensional columns.
 >       children = map bidantCover' [left, right]
 >       keys = [False, True]
 
--- > newtype NCLatLonDegs a = MkLLD (a, a) deriving Show
--- > newtype NCLatLon a = MkLL (a, a) deriving Show
-
--- > frac :: RealFrac a => a -> a
--- > frac x = x - (fromIntegral $ (floor x :: Integer))
-
--- > digits :: RealFrac a => a -> [Int]
--- > digits x' = digits' (frac x')
--- >   where digits' x | x >= 0.5 = 1 : (digits $ (x * 2))
--- >                   | otherwise = 0 : (digits $ (x * 2))
-
--- > quadTreeZip v1 v2 = zipWith (\x y -> x + 2 * y) (digits v1) (digits v2)
-
--- > instance (Floating a, RealFrac a) => NCDim (NCSphericalMercator a) where
--- >     dimAddr (MkSM (x, y)) = MkDimAddr $ quadTreeZip (x / (2 * pi) + 0.5) (y / (2 * pi) + 0.5)
-
--- > fromDegs :: (Floating a, RealFrac a) => NCLatLonDegs a -> NCLatLon a
--- > fromDegs (MkLLD (lat, lon)) = MkLL (lat * pi / 180.0, lon * pi / 180.0)
-
--- > fromLatLon :: (Floating a, RealFrac a) => NCLatLon a -> NCSphericalMercator a
--- > fromLatLon (MkLL (lat, lon)) = MkSM (lon, log $ tan $ (lat / 2 + pi / 4))
-
--- this requires a 2D dimension
--- quadrantCover :: (Floating a, RealFrac a, Integral b) => (a, a) -> (a, a) -> [DimAddr b]
--- quadrantCover 
-
-
 --------------------------------------------------------------------------------
 Utility
 
 > truncateDim :: Int -> DimAddr a -> DimAddr a
 > truncateDim n (MkDimAddr l) = MkDimAddr $ take n l
+
 > frac :: RealFrac a => a -> a
 > frac x = x - (fromIntegral $ (floor x :: Integer))
 
