@@ -4,12 +4,14 @@
 > module Query where
 >
 > import Nanocube
+> import Spatial
 > import qualified Data.Map.Strict as Map
 > import Data.Monoid
+> import Data.Maybe
 > import Text.JSON
 > import Data.ByteString (ByteString)
 
-A lookup in a single dimension of a nanocube is simply a traversal
+A single lookup in a single dimension of a nanocube is simply a traversal
 down the rose tree.
 
 > class SingleDimLookup a n where
@@ -27,6 +29,19 @@ down the rose tree.
 
 --------------------------------------------------------------------------------
 
+> class Query' q n n' | q n -> n' where
+>   query :: q -> n -> (q, n, n')
+
+> instance Query' () (NanoNil s) (NanoNil s) where
+>   query () s = ((), s, s)
+
+--------------------------------------------------------------------------------
+Simple queries aggregate multiple drill-downs independently; each DimAddr
+traverses the nanocube dimension from the root.
+
+> data SimpleQueryDim a = QuerySum [DimAddr a] | QuerySplit [DimAddr a]
+> data SimpleQuery a t = SimpleQuery (SimpleQueryDim a) t
+
 > class SingleLookup s a n | a n -> s where
 >   singleLookup :: a -> n -> s
 > instance (Eq s, Monoid s) => SingleLookup s () (NanoNil s) where
@@ -38,30 +53,22 @@ down the rose tree.
 >   singleLookup (MkAddr a rest) n =
 >      singleLookup rest $ nanoTail $ singleDimLookup a n
 
-> data QueryDim a = QuerySum [DimAddr a] | QuerySplit [DimAddr a]
-> data Query a t = Query (QueryDim a) t
-
 We return references to the original query and nanocube with the query
 result because of a quirk on AsJSON, as described below.
 
 > third :: (a,b,c) -> c
 > third (a, b, c) = c
 > 
-> class Query' q n n' | q n -> n' where
->   query :: q -> n -> (q, n, n')
-> 
-> instance Query' () (NanoNil s) (NanoNil s) where
->   query () s = ((), s, s)
 > instance (Eq s, Monoid s, Ord a, Monoid n, Monoid n',
 >           Singleton n' s, HasContent n' s,
->           Query' q n n') => Query' (Query a q) (NanoCons s a n) (NanoCons s [a] n') where
->   query :: Query a q -> NanoCons s a n -> (Query a q, NanoCons s a n, NanoCons s [a] n')
->   query q@(Query (QuerySum addrs) rest) c = 
+>           Query' q n n') => Query' (SimpleQuery a q) (NanoCons s a n) (NanoCons s [a] n') where
+>   query :: SimpleQuery a q -> NanoCons s a n -> (SimpleQuery a q, NanoCons s a n, NanoCons s [a] n')
+>   query q@(SimpleQuery (QuerySum addrs) rest) c = 
 >     let rs = map getSummary addrs
 >         getSummary :: DimAddr a -> s
 >         getSummary a = content $ third $ query rest $ nanoTail $ singleDimLookup a c
 >      in (q, c, singleton $ mconcat rs)
->   query q@(Query (QuerySplit addrs) rest) c =
+>   query q@(SimpleQuery (QuerySplit addrs) rest) c =
 >     let rs :: [NanoCons s [a] n']
 >         rs = map getNextQuery addrs
 >         getNextQuery :: DimAddr a -> NanoCons s [a] n'
@@ -72,6 +79,9 @@ result because of a quirk on AsJSON, as described below.
 >         nextCube :: NanoCons s [a] n'
 >         nextCube = mconcat rs
 >      in (q, c, nextCube)
+
+--------------------------------------------------------------------------------
+Printing query results
 
 It's silly that we have to satisfy the type checker by passing the
 original nanocube here, but maybe that can be fixed later.
@@ -85,11 +95,26 @@ original nanocube here, but maybe that can be fixed later.
 >           Ord r, JSON r,
 >           Monoid n, Monoid n',
 >           AsJSON q' n n',
->           HasContent n' s, Singleton n' s) => AsJSON (Query r q') (NanoCons s r n) (NanoCons s [r] n') where
->   asJSON :: (Query r q', NanoCons s r n, NanoCons s [r] n') -> JSValue
->   asJSON (Query (QuerySum _) rest, NanoCons next _, NanoCons rnext rrefine) = asJSON (rest, next, rnext)
->   asJSON (Query (QuerySplit s) rest, NanoCons next _, NanoCons rnext rrefine) =
+>           HasContent n' s, Singleton n' s) => AsJSON (SimpleQuery r q') (NanoCons s r n) (NanoCons s [r] n') where
+>   asJSON :: (SimpleQuery r q', NanoCons s r n, NanoCons s [r] n') -> JSValue
+>   asJSON (SimpleQuery (QuerySum _) rest, NanoCons next _, NanoCons rnext rrefine) = asJSON (rest, next, rnext)
+>   asJSON (SimpleQuery (QuerySplit s) rest, NanoCons next _, NanoCons rnext rrefine) =
 >     JSArray (map makePair (Map.assocs rrefine))
 >       where
 >         makePair (addrs, c) = showJSON (toJSObject [("key", showJSON addrs),
 >                                                     ("value", asJSON (rest, next, rnext))])
+
+--------------------------------------------------------------------------------
+
+This is slower than I'd like because of all the nested
+concatMaps. There should be a CPS transformation in here.
+
+> visitRegion :: Ord r => (NanoCons s r n -> a) -> NanoCons s r n -> Region r -> [a]
+> visitRegion f c                          (MkRegion (Left ())) = [f c]
+> visitRegion f (NanoCons next nanoRefine) (MkRegion (Right regionRefine)) =
+>   let lookup k = do n <- Map.lookup k nanoRefine
+>                     r <- Map.lookup k regionRefine
+>                     return (n, r)
+>       intersectionRefines = catMaybes $ map lookup $ Map.keys regionRefine
+>    in concatMap (uncurry (visitRegion f)) intersectionRefines
+

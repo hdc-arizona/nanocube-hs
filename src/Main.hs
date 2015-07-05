@@ -4,6 +4,7 @@
 module Main where
 
 import Query
+import Spatial
 import Nanocube
 import Text.JSON
 import Data.Monoid
@@ -46,13 +47,13 @@ c2 = add p2 u c1
 c3 = add p3 u c2
 c4 = add p4 u c3
 
-qsum :: [[a]] -> q -> Query a q
-qsum addrs q = Query (QuerySum $ map MkDimAddr addrs) q
+qsum :: [[a]] -> q -> SimpleQuery a q
+qsum addrs q = SimpleQuery (QuerySum $ map MkDimAddr addrs) q
 
 q0'' = ()
-q0' :: Query Int ()
+q0' :: SimpleQuery Int ()
 q0' = qsum [[]] q0''
-q0 :: Query Int $ Query Int $ ()
+q0 :: SimpleQuery Int $ SimpleQuery Int $ ()
 q0 = qsum [[]] q0'
 
 r0'' = query q0'' c0''

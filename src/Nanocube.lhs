@@ -1,8 +1,8 @@
 > {-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, FunctionalDependencies, UndecidableInstances #-}
 > {-# LANGUAGE InstanceSigs, ScopedTypeVariables, TypeOperators #-}
-
+>
 > module Nanocube where
-
+>
 > import qualified Data.Map.Strict as Map
 > import Data.Monoid
 > import Text.JSON
