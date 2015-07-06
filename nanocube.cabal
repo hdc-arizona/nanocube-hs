@@ -20,6 +20,7 @@ executable nanocube
   main-is:             Main.hs
   -- other-modules:       
   -- other-extensions:    
-  build-depends:       base >=4.8 && <4.9, containers, bytestring, json
+  build-depends:       base >=4.8 && <4.9, containers, bytestring, json, 
+   QuickCheck, random
   hs-source-dirs:      src
   default-language:    Haskell2010

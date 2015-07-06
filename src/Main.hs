@@ -5,13 +5,37 @@ module Main where
 
 import Query
 import Spatial
+import Schema
 import Nanocube
 import Text.JSON
 import Data.Monoid
 import RoseTree
+import System.Random
 
 main = putStrLn "hello"
 
+newtype Point2 = MkPoint2 (Double, Double) deriving Show
+
+instance Random Point2 where
+  -- really, no monad here to help me?
+  randomR (MkPoint2 (mnx, mny), MkPoint2 (mxx, mxy)) g =
+    case randomR (mnx, mxx) g of
+      (x, g') -> case randomR (mny, mxy) g' of
+        (y, g'') -> (MkPoint2 (x, y), g'')
+  random g = randomR (MkPoint2 (0.0, 0.0), MkPoint2 (1.0, 1.0)) g
+
+randomPointsInCircle g = map shrink . filter check . map grow $ randoms g :: [Point2]
+  where grow (MkPoint2 (x, y)) = MkPoint2 (x * 2 - 1, y * 2 - 1)
+        check (MkPoint2 (x, y)) = x * x + y * y <= 1
+        shrink (MkPoint2 (x, y)) = MkPoint2 (x / 2 + 0.5, y / 2 + 0.5)
+
+randomNanocube :: Int -> IO (NC2D (Sum Int))
+randomNanocube n = do g <- newStdGen
+                      let ps = map (addr1 . truncateDim 8 . dimAddr . toUS) $ take n (randomPointsInCircle g)
+                      return $ foldr (\p n -> add p (Sum 1 :: Sum Int) n) mempty ps
+  where
+    toUS (MkPoint2 a) = MkUS a
+                      
 --------------------------------------------------------------------------------
 -- ... why don't people do this?
 

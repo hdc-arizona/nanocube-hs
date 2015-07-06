@@ -7,6 +7,7 @@
 > import Nanocube
 > import Data.Maybe
 > import Debug.Trace
+> import Test.QuickCheck
 > 
 > class NCDim a b | a -> b where
 >   dimAddr :: a -> DimAddr b
@@ -36,8 +37,8 @@ A "Bidant" is the 1-dimensional equivalent of a quadrant.
 
 Some type synonyms for convenience
 
-> type NC2D s n = NanoCons s Quadrant n
-> type NC1D s n = NanoCons s Bidant n
+> type NC2D' s n = NanoCons s Quadrant n
+> type NC1D' s n = NanoCons s Bidant n
 
 --------------------------------------------------------------------------------
 
@@ -150,15 +151,9 @@ bad idea anyway.
 >     quadrantCover' ((0, 1), (0, 1))
 >   where
 >     quadrantCover' (regionX, regionY)
->       | insideX     && insideY  =
->           -- trace ("inside " ++ (show regionX) ++ "-" ++ (show regionY) ++ "\n") $
->           (MkRegion $ Left ())
->       | outsideX    || outsideY =
->           -- trace ("outside " ++ (show regionX) ++ "-" ++ (show regionY) ++ "\n") $
->           (MkRegion $ Right $ Map.empty)
->       | otherwise               =
->           -- trace ("split " ++ (show regionX) ++ "-" ++ (show regionY) ++ "\n") $
->           (MkRegion $ Right $ Map.fromList $ filter (\ (_, v) -> v /= (MkRegion (Right Map.empty))) $ zip keys children)
+>       | insideX   && insideY  = MkRegion $ Left ()
+>       | outsideX  || outsideY = MkRegion $ Right $ Map.empty
+>       | otherwise             = newRegion $ zip keys children
 >       where
 >         insideX  = regionX `insideOf` queryX 
 >         insideY  = regionY `insideOf` queryY
@@ -174,17 +169,18 @@ bad idea anyway.
 
 --------------------------------------------------------------------------------
 
-The same general idea of "Region Quadrant" applies for regions in other dimensions.
+The same general idea of "Region Quadrant" applies for regions in
+other dimensions.
 
-Region Bidant, specifically, encodes a subset of [0,1], which we'll use to
-encode one-dimensional columns.
+Region Bidant, specifically, encodes a subset of [0,1], which we'll
+use to encode one-dimensional columns.
 
 > bidantCover :: (Floating a, RealFrac a) => (a, a) -> Region Bidant
 > bidantCover query = bidantCover' (0, 1) where
 >   bidantCover' interval
 >     | inside    = MkRegion $ Left ()
 >     | outside   = MkRegion $ Right $ Map.empty
->     | otherwise = MkRegion $ Right $ Map.fromList $ filter (\ (k, v) -> v /= MkRegion (Right Map.empty)) $ zip keys children
+>     | otherwise = newRegion $ zip keys children
 >     where
 >       inside  = interval `insideOf` query
 >       outside = interval `outsideOf` query
@@ -195,13 +191,82 @@ encode one-dimensional columns.
 --------------------------------------------------------------------------------
 Utility
 
+> newRegion :: (Ord a, Eq a) => [(a, Region a)] -> Region a
+> newRegion = MkRegion . Right . Map.fromList .
+>   filter (\ (_, v) -> v /= (MkRegion (Right Map.empty)))
+
 > truncateDim :: Int -> DimAddr a -> DimAddr a
 > truncateDim n (MkDimAddr l) = MkDimAddr $ take n l
 
 > frac :: RealFrac a => a -> a
 > frac x = x - (fromIntegral $ (floor x :: Integer))
-
+  
 > digits :: RealFrac a => a -> [Bool]
-> digits x | x >= 0.5  = True  : rest
->          | otherwise = False : rest
->   where rest = digits $ x * 2
+> digits x | x >= 0.5  = True  : (digits $ x * 2 - 1)
+>          | otherwise = False : (digits $ x * 2)
+
+> fromDigits :: [Bool] -> Double
+> fromDigits lst = fromDigits' 0 0.5 lst
+>   where
+>     fromDigits' accum weight [] = accum
+>     fromDigits' accum weight (el:els) =
+>       fromDigits' (accum + (if el then weight else 0)) (weight/2) els
+
+--------------------------------------------------------------------------------
+Testing
+
+> numbersInUnitInterval = choose (0.0, 1.0)
+> prop_digits depth = forAll numbersInUnitInterval $
+>     \number -> depth >= 0 ==> (number - fromDigits (take depth $ digits number)) <= 2 ** (negate $ fromIntegral depth)
+>   where
+>     types = depth :: Int
+
+> testPoint :: (Floating a, RealFrac a) => (NCUnitSquare a) -> Region Quadrant -> Bool
+> testPoint p r = let (MkDimAddr lst) = dimAddr p
+>                 in testPoint' lst r
+>   where
+>     testPoint' _ (MkRegion (Left ())) = True
+>     testPoint' (el:els) (MkRegion (Right m)) =
+>       maybe False (\next -> testPoint' els next) (Map.lookup el m)
+
+> genQuadrantLeaf :: Gen (Region Quadrant)
+> genQuadrantLeaf = oneof [return $ MkRegion $ Left (), return $ MkRegion $ Right Map.empty]
+>
+> genQuadrant = sized genQuadrant'
+> genQuadrant' 0 = genQuadrantLeaf
+> genQuadrant' n | n > 0 =
+>                  oneof [genQuadrantLeaf,
+>                         do pairs <- sequence $ map genPair [minBound..maxBound]
+>                            return $ MkRegion $ Right $ Map.fromList pairs]
+>    where
+>      genPair key = do v <- genQuadrant' (n `div` 4)
+>                       return (key, v)
+
+> pointsInUnitSquare = do a <- numbersInUnitInterval
+>                         b <- numbersInUnitInterval
+>                         return $ MkUS (a, b)
+>
+> instance Arbitrary (Region Quadrant) where
+>   arbitrary = genQuadrant
+
+> prop_coverSimplify region depth = forAll pointsInUnitSquare $
+>   \point -> depth >= 0 && testPoint point region ==> testPoint point (coverRegion depth region)
+>   where types = (region :: Region Quadrant,
+>                  depth :: Int)
+> prop_coverSimplify2 region depth = forAll pointsInUnitSquare $
+>   \point -> depth >= 0 && (not $ testPoint point (coverRegion depth region)) ==> not $ testPoint point region
+>   where types = (region :: Region Quadrant,
+>                  depth :: Int)
+> prop_cropSimplify region depth = forAll pointsInUnitSquare $
+>   \point -> depth >= 0 && testPoint point (cropRegion depth region) ==> testPoint point region
+>   where types = (region :: Region Quadrant,
+>                  depth :: Int)
+> prop_cropSimplify2 region depth = forAll pointsInUnitSquare $
+>   \point -> depth >= 0 && (not $ testPoint point region) ==> not $ testPoint point (cropRegion depth region)
+>   where types = (region :: Region Quadrant,
+>                  depth :: Int)
+> testSpatial = do quickCheck prop_cropSimplify
+>                  quickCheck prop_cropSimplify2
+>                  quickCheck prop_coverSimplify
+>                  quickCheck prop_coverSimplify2
+>                  quickCheck prop_digits

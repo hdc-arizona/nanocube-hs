@@ -53,6 +53,11 @@ The type variable a denotes the type of the key of the hierarchy of the
 > data Addr a t = MkAddr (DimAddr a) t deriving Show
 > newtype DimAddr a = MkDimAddr { getDimAddr :: [a] } deriving (Show, Eq)
 
+> addr1 :: DimAddr a -> Addr a ()
+> addr1 a = MkAddr a ()
+> addr2 :: DimAddr a -> DimAddr b -> Addr a (Addr b ())
+> addr2 a b = MkAddr a (addr1 b)
+
 --------------------------------------------------------------------------------
 
 Singleton is a helper typeclass to build nanocubes with a single element.
